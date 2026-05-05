@@ -3,7 +3,7 @@ import Projects from 'app/projects/projects';
 
 export const metadata = {
   title: 'Projects',
-  description: 'My Projects - Tanisha Jain',
+  description: 'My Projects - Vishal Aggarwal',
 };
 
 export default function Page() {

@@ -26,7 +26,7 @@ export default function Header() {
               )}
               aria-label="d."
             >
-              Tanisha
+              Vishal
             </Link>
           </div>
           <div className="flex items-center space-x-3 text-base leading-5">

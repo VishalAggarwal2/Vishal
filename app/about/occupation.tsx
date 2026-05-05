@@ -4,18 +4,18 @@ export default function Occupation() {
   return (
     <div className="mb-8 flex flex-col-reverse items-center justify-between sm:flex-row sm:items-center">
       <div className="text-left">
-        <h1 className="text-xl font-bold md:text-3xl lg:text-4xl">Tanisha Jain</h1>
+        <h1 className="text-xl font-bold md:text-3xl lg:text-4xl">Vishal Aggarwal</h1>
         <h2 className="text-sm font-normal md:text-base">
-          Manual Automation &amp; AI Solutions Engineer &mdash; reducing manual work with AI-powered
-          automation
+          Full Stack Developer &mdash; building scalable apps, APIs &amp; microservices with Java
+          Spring Boot, MERN stack, and modern DevOps practices
         </h2>
       </div>
       <div>
         <Image
-          alt="Tanisha Jain"
+          alt="Vishal Aggarwal"
           height={30}
           width={100}
-          src="/static/images/Tanisha.jpeg"
+          src="/static/images/Vishal.jpeg"
           className="rounded-full"
         />
       </div>

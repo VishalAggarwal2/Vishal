@@ -13,7 +13,7 @@ const { content } = readMDXFile(contentPath);
 // Metadata for the page
 export const metadata = {
   title: 'About',
-  description: 'About Tanisha Jain - Full Stack Developer',
+  description: 'About Vishal Aggarwal - Backend & DevOps Engineer',
 };
 
 // Page component

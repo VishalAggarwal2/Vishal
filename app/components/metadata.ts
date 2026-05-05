@@ -1,17 +1,17 @@
 export const siteMetadata = {
-  title: 'Tanisha Jain',
-  author: 'Tanisha Jain',
-  headerTitle: 'TanishaJain',
+  title: 'Vishal Aggarwal',
+  author: 'Vishal Aggarwal',
+  headerTitle: 'Vishal Aggarwal',
   description:
-    'Manual Automation & AI Solutions Engineer, reducing manual work with AI-powered automation.',
+    'Full Stack Developer skilled in Java Spring Boot, MERN stack, CI/CD, Docker, and cloud-native monitoring.',
   language: 'en-us',
-  theme: 'dark', // system, dark or
+  theme: 'dark',
   siteLogo: '/static/images/logo.png',
   image: '/static/images/avatar.webp',
   socialBanner: '/static/images/twitter-card.png',
-  email: 'Tanishacse26@gmail.com',
-  github: 'https://leetcode.com/u/Tanishajain16/',
-  linkedin: 'https://www.linkedin.com/in/tanisha-jain-06168b256/',
+  email: 'vishalaggar230@gmail.com',
+  github: 'https://github.com/VishalAggarwal2',
+  linkedin: 'https://www.linkedin.com/in/vishal-aggarwal-414730248/',
   locale: 'en-US',
   siteUrl: 'https://example.com',
 };

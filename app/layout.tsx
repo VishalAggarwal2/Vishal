@@ -11,12 +11,12 @@ import { ReactNode } from 'react';
 
 export const metadata: Metadata = {
   title: {
-    template: '%s | Tanisha Jain',
-    default: 'Tanisha Jain',
+    template: '%s | Vishal Aggarwal',
+    default: 'Vishal Aggarwal',
   },
   description:
-    'Aspiring Manual Automation & AI Solutions Engineer intern, building AI-powered automation workflows with Python, n8n, Zapier, Puppeteer, Selenium, and JavaScript.',
-  metadataBase: new URL('https://dalelarroder.com'),
+    'Full Stack Developer skilled in Java Spring Boot, MERN stack, microservices, CI/CD (Jenkins), Docker, and monitoring with Prometheus and Grafana.',
+  metadataBase: new URL('https://vishalaggarwal.dev'),
 };
 
 interface RootLayoutProps {

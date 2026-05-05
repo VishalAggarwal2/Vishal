@@ -19,28 +19,28 @@ export const workTiles: WorkTile[] = [
     },
   },
   {
-    description: 'I built',
-    title: 'CuraBot - Medical ChatBot',
+    description: 'I interned at',
+    title: 'Bajaj Finserv Health',
     image: {
-      src: '/static/images/CuraBot.png',
-      width: 600,
-      height: 554,
-    },
-  },
-  {
-    description: `I built`,
-    title: 'Sentiment Analysis',
-    image: {
-      src: '/static/images/sentiment.png',
+      src: '/static/images/project/CiCd.png',
       width: 600,
       height: 717,
     },
   },
   {
-    description: `I Attended`,
-    title: 'SkilCraft Technology',
+    description: `I built`,
+    title: 'Phoenix Portal – LNMIIT',
     image: {
-      src: '/static/images/skillcraft.png',
+      src: '/static/images/project/Phoenix.png',
+      width: 600,
+      height: 554,
+    },
+  },
+  {
+    description: `I wrote`,
+    title: 'Technical Blogs on Medium',
+    image: {
+      src: '/static/images/project/Medium.png',
       width: 600,
       height: 717,
     },
