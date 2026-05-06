@@ -25,8 +25,8 @@ export default function Hero() {
   return (
     <div>
       <h1 className="sr-only">
-        Hello I&apos;m Vishal Aggarwal, a Full Stack Developer skilled in Java Spring Boot, MERN
-        stack, microservices, CI/CD, Docker, and cloud-native monitoring.
+        Hello I&apos;m Vishal Aggarwal, a Full Stack Developer and Product Manager skilled in Java
+        Spring Boot, MERN stack, microservices, CI/CD, Docker, product strategy, and user research.
       </h1>
       <div className="relative z-10 flex h-[calc(100vh-81px)] items-center md:h-[calc(100vh-116px)]">
         <div className="mx-auto w-screen max-w-3xl px-4 sm:px-9 xl:max-w-5xl xl:px-0">
@@ -36,9 +36,10 @@ export default function Hero() {
                 Vishal Aggarwal
               </h1>
               <h2 className="text-3xl font-medium opacity-80 sm:text-6xl md:text-6xl xl:text-7xl">
-                Full Stack Developer
+                Software Developer
+                <span className="block opacity-70">&amp; Product Manager</span>
                 <span className="block text-xl font-normal sm:text-3xl md:text-3xl xl:text-4xl">
-                  Building scalable apps, APIs &amp; production-ready systems
+                  From system architecture to product strategy — shipping what matters
                 </span>
               </h2>
               <Link
