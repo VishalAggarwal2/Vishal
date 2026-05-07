@@ -98,3 +98,21 @@ input:-webkit-autofill:focus {
 [cmdk-empty] {
   @apply flex items-center justify-center py-4 text-sm text-gray-500;
 }
+
+/* View Transitions — radial reveal from theme toggle button */
+@keyframes vt-reveal {
+  from {
+    clip-path: circle(0 at var(--vt-x, 50%) var(--vt-y, 50%));
+  }
+  to {
+    clip-path: circle(100vmax at var(--vt-x, 50%) var(--vt-y, 50%));
+  }
+}
+
+::view-transition-new(root) {
+  animation: vt-reveal 0.5s cubic-bezier(0.25, 1, 0.5, 1) both;
+}
+
+::view-transition-old(root) {
+  animation: none;
+}

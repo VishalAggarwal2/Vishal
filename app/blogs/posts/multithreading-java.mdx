@@ -1,0 +1,252 @@
+---
+title: 'Multithreading in Java'
+publishedAt: '2024-03-10'
+summary: 'Deep dive into Java threads, synchronization, and concurrent programming patterns for building performant backend systems.'
+tag: 'Java'
+image: 'MultithreadingJava.png'
+draft: false
+---
+
+Multithreading is one of those topics that separates decent Java developers from great ones. I spent a lot of time debugging race conditions and deadlocks before I truly understood how the JVM handles threads. This article is everything I wish I had known earlier.
+
+## What Is a Thread?
+
+A thread is the smallest unit of execution within a process. Java runs every program with at least one thread — the **main thread**. You can spin up additional threads to do work concurrently.
+
+```java
+Thread t = new Thread(() -> {
+    System.out.println("Running in: " + Thread.currentThread().getName());
+});
+t.start();
+```
+
+The JVM maps Java threads to OS-level threads (platform threads pre-Java 21). Each thread gets its own stack but shares heap memory with other threads in the same process. That shared heap is both the power and the danger of multithreading.
+
+## Creating Threads: Three Ways
+
+**1. Extending Thread:**
+
+```java
+class MyThread extends Thread {
+    public void run() {
+        System.out.println("Thread running");
+    }
+}
+new MyThread().start();
+```
+
+**2. Implementing Runnable:**
+
+```java
+Runnable task = () -> System.out.println("Runnable running");
+new Thread(task).start();
+```
+
+**3. Using ExecutorService (preferred):**
+
+```java
+ExecutorService executor = Executors.newFixedThreadPool(4);
+executor.submit(() -> System.out.println("Executor task"));
+executor.shutdown();
+```
+
+Always prefer `ExecutorService` in production. Raw thread creation is expensive and unmanaged threads are hard to monitor.
+
+## The Visibility Problem
+
+Here is a classic bug:
+
+```java
+boolean running = true;
+
+// Thread 1
+while (running) { /* do work */ }
+
+// Thread 2
+running = false; // Thread 1 may NEVER see this
+```
+
+Without synchronization, the JVM can cache `running` in a CPU register or L1 cache, and Thread 1 might loop forever. The fix is `volatile`:
+
+```java
+volatile boolean running = true;
+```
+
+`volatile` guarantees that writes are immediately visible to all threads. But it does NOT make compound operations atomic.
+
+## Synchronization
+
+Use `synchronized` to protect critical sections:
+
+```java
+class Counter {
+    private int count = 0;
+
+    public synchronized void increment() {
+        count++;
+    }
+
+    public synchronized int get() {
+        return count;
+    }
+}
+```
+
+`synchronized` on an instance method locks on `this`. On a static method it locks on the class object. You can also use a synchronized block for finer control:
+
+```java
+private final Object lock = new Object();
+
+public void increment() {
+    synchronized (lock) {
+        count++;
+    }
+}
+```
+
+## The Java Memory Model (JMM)
+
+The JMM defines when changes made by one thread become visible to others. Key rules:
+
+- **Happens-before**: If action A happens-before action B, then A's effects are visible to B.
+- `synchronized` establishes happens-before between a monitor unlock and the next lock.
+- `volatile` establishes happens-before between a write and subsequent reads.
+- Thread start and join also establish happens-before.
+
+Without a happens-before relationship, the compiler and CPU are free to reorder your code in ways that break expectations.
+
+## java.util.concurrent
+
+The `java.util.concurrent` package is your best friend. Stop writing raw `synchronized` blocks when these exist:
+
+**ReentrantLock** — explicit locking with tryLock, fairness options:
+
+```java
+ReentrantLock lock = new ReentrantLock();
+lock.lock();
+try {
+    // critical section
+} finally {
+    lock.unlock(); // always unlock in finally
+}
+```
+
+**AtomicInteger** — lock-free atomic operations:
+
+```java
+AtomicInteger counter = new AtomicInteger(0);
+counter.incrementAndGet(); // atomic, no lock needed
+```
+
+**CountDownLatch** — wait for N threads to complete:
+
+```java
+CountDownLatch latch = new CountDownLatch(3);
+// Each worker calls latch.countDown()
+latch.await(); // blocks until count reaches 0
+```
+
+**CyclicBarrier** — synchronize N threads at a checkpoint:
+
+```java
+CyclicBarrier barrier = new CyclicBarrier(3, () -> System.out.println("All threads reached barrier"));
+barrier.await(); // each thread calls this
+```
+
+**Semaphore** — limit concurrent access to a resource:
+
+```java
+Semaphore semaphore = new Semaphore(5); // max 5 concurrent
+semaphore.acquire();
+try {
+    // access limited resource
+} finally {
+    semaphore.release();
+}
+```
+
+## Thread Pools
+
+Creating a new thread for every task is wasteful. Thread pools reuse threads:
+
+```java
+// Fixed pool — good for CPU-bound tasks
+ExecutorService fixed = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+// Cached pool — good for short-lived IO-bound tasks
+ExecutorService cached = Executors.newCachedThreadPool();
+
+// Scheduled pool — for recurring tasks
+ScheduledExecutorService scheduled = Executors.newScheduledThreadPool(2);
+scheduled.scheduleAtFixedRate(() -> System.out.println("tick"), 0, 1, TimeUnit.SECONDS);
+```
+
+For production use, always create a `ThreadPoolExecutor` explicitly so you control queue size, rejection policy, and thread naming:
+
+```java
+ThreadPoolExecutor executor = new ThreadPoolExecutor(
+    4,                          // core threads
+    8,                          // max threads
+    60L, TimeUnit.SECONDS,      // keepAlive
+    new LinkedBlockingQueue<>(100),
+    new ThreadPoolExecutor.CallerRunsPolicy()
+);
+```
+
+## Deadlocks
+
+A deadlock occurs when two threads each hold a lock the other needs:
+
+```java
+// Thread 1: locks A then tries to lock B
+// Thread 2: locks B then tries to lock A
+// Both block forever
+```
+
+Prevention strategies:
+
+1. **Lock ordering** — always acquire locks in the same order
+2. **tryLock with timeout** — give up if you can't acquire
+3. **Lock-free data structures** — avoid locks altogether
+
+## ForkJoinPool and Parallel Streams
+
+For divide-and-conquer workloads, `ForkJoinPool` is optimal:
+
+```java
+ForkJoinPool pool = new ForkJoinPool();
+int sum = pool.invoke(new RecursiveSumTask(array, 0, array.length));
+```
+
+Parallel streams use the common ForkJoinPool internally:
+
+```java
+long count = list.parallelStream()
+    .filter(x -> x > 100)
+    .count();
+```
+
+Be careful with parallel streams — for small datasets or IO-bound work, the overhead of splitting and merging outweighs the gains.
+
+## Virtual Threads (Java 21+)
+
+Java 21 introduced virtual threads (Project Loom), which are lightweight threads managed by the JVM rather than the OS:
+
+```java
+Thread.ofVirtual().start(() -> {
+    // blocking IO doesn't pin an OS thread
+    String result = callExternalApi();
+});
+```
+
+Virtual threads make blocking IO cheap — you can have millions of them. This changes the game for high-concurrency servers. If you're on Java 21+, use virtual threads for IO-bound work and platform threads only for CPU-bound tasks.
+
+## Key Takeaways
+
+- Use `volatile` for visibility, `synchronized` or `Lock` for atomicity of compound operations
+- Prefer `java.util.concurrent` utilities over raw synchronization
+- Always name your threads and use thread pools in production
+- Deadlocks come from inconsistent lock ordering — establish a global order
+- Java 21 virtual threads remove most reasons to avoid blocking IO
+
+Multithreading is hard to get right, but understanding the JMM, visibility guarantees, and the concurrency utilities makes it tractable. The key is writing code that makes synchronization explicit and auditable.

@@ -1,0 +1,374 @@
+---
+title: 'Go: Goroutines, Channels, Mutex, Atomic & Garbage Collector'
+publishedAt: '2024-06-01'
+summary: 'A deep dive into Go concurrency primitives and how the Go runtime manages memory — from goroutines to the tricolor mark-and-sweep GC.'
+tag: 'Go'
+image: 'GoLang.png'
+draft: false
+---
+
+Go was designed from the ground up for concurrency. After years of writing multithreaded Java and C++, working with goroutines and channels felt like a completely different mental model. This article covers Go's concurrency primitives and the runtime garbage collector in depth.
+
+## Goroutines
+
+A goroutine is a lightweight thread managed by the Go runtime. Creating one is trivially cheap:
+
+```go
+go func() {
+    fmt.Println("I run concurrently")
+}()
+```
+
+The key difference from OS threads: goroutines start with a stack of only **2KB** (versus 1–8MB for OS threads) and the runtime multiplexes them onto a small number of OS threads using the **GMP scheduler**.
+
+### The GMP Scheduler
+
+Go's scheduler has three entities:
+
+- **G** — Goroutine (the unit of work)
+- **M** — Machine (OS thread)
+- **P** — Processor (context that holds a run queue of goroutines)
+
+By default, Go creates P = `GOMAXPROCS` processors (defaults to number of CPU cores). Each P has a local run queue of goroutines. Each M must hold a P to run goroutines.
+
+When a goroutine blocks on IO or a syscall, the runtime parks the M (or hands the P to another M), so other goroutines can continue. This is why you can have millions of goroutines — most of them are parked at any given moment.
+
+```go
+// GOMAXPROCS controls the degree of parallelism
+runtime.GOMAXPROCS(4) // use 4 OS threads
+```
+
+## Channels: Communicating Between Goroutines
+
+Go's philosophy: _"Do not communicate by sharing memory; instead, share memory by communicating."_ Channels are the mechanism.
+
+```go
+// Unbuffered channel — send blocks until receiver is ready
+ch := make(chan int)
+
+go func() {
+    ch <- 42 // send
+}()
+
+value := <-ch // receive
+fmt.Println(value) // 42
+```
+
+### Buffered Channels
+
+```go
+ch := make(chan int, 5) // buffer of 5
+
+ch <- 1 // doesn't block — buffer has space
+ch <- 2
+ch <- 3
+
+fmt.Println(<-ch) // 1
+```
+
+A send on a buffered channel only blocks when the buffer is full. A receive only blocks when the buffer is empty.
+
+### Range Over Channel
+
+```go
+ch := make(chan int, 3)
+ch <- 10; ch <- 20; ch <- 30
+close(ch)
+
+for v := range ch {
+    fmt.Println(v) // 10, 20, 30
+}
+// range exits when channel is closed and drained
+```
+
+### Select: Non-blocking and Multiplex
+
+```go
+select {
+case msg := <-ch1:
+    fmt.Println("from ch1:", msg)
+case msg := <-ch2:
+    fmt.Println("from ch2:", msg)
+case <-time.After(1 * time.Second):
+    fmt.Println("timeout")
+default:
+    fmt.Println("no channel ready") // non-blocking
+}
+```
+
+`select` picks a ready case at random if multiple are ready. Use `default` for non-blocking channel operations.
+
+## WaitGroup: Waiting for Multiple Goroutines
+
+```go
+var wg sync.WaitGroup
+
+for i := 0; i < 5; i++ {
+    wg.Add(1)
+    go func(id int) {
+        defer wg.Done()
+        fmt.Printf("Worker %d done\n", id)
+    }(i)
+}
+
+wg.Wait() // blocks until all Done() calls balance Add() calls
+```
+
+## Mutex: Protecting Shared State
+
+When multiple goroutines share mutable data, use a mutex:
+
+```go
+type SafeCounter struct {
+    mu sync.Mutex
+    count int
+}
+
+func (c *SafeCounter) Increment() {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.count++
+}
+
+func (c *SafeCounter) Value() int {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    return c.count
+}
+```
+
+Always `defer mu.Unlock()` to guarantee the unlock even if the function panics.
+
+### RWMutex: Concurrent Reads
+
+```go
+type Cache struct {
+    mu    sync.RWMutex
+    store map[string]string
+}
+
+func (c *Cache) Get(key string) (string, bool) {
+    c.mu.RLock() // multiple readers can hold this simultaneously
+    defer c.mu.RUnlock()
+    v, ok := c.store[key]
+    return v, ok
+}
+
+func (c *Cache) Set(key, value string) {
+    c.mu.Lock() // exclusive
+    defer c.mu.Unlock()
+    c.store[key] = value
+}
+```
+
+## Atomic Operations
+
+For simple counters and flags, `sync/atomic` is faster than a mutex — it uses hardware-level compare-and-swap (CAS):
+
+```go
+import "sync/atomic"
+
+var counter int64
+
+atomic.AddInt64(&counter, 1)
+fmt.Println(atomic.LoadInt64(&counter))
+
+// CAS — set to 10 only if current value is 5
+swapped := atomic.CompareAndSwapInt64(&counter, 5, 10)
+```
+
+Use atomics for: counters, flags, once-initialized values. Prefer a mutex for anything more complex.
+
+## Context: Cancellation and Timeouts
+
+The `context` package is how you propagate cancellation and deadlines through your call graph:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+resp, err := http.DefaultClient.Do(req)
+if err != nil {
+    // could be context.DeadlineExceeded
+    log.Println(err)
+}
+```
+
+```go
+// Cancellable goroutine
+ctx, cancel := context.WithCancel(context.Background())
+
+go func() {
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        default:
+            doWork()
+        }
+    }
+}()
+
+cancel() // signals the goroutine to stop
+```
+
+Always pass `ctx` as the first argument to functions that do IO or external calls.
+
+## The Go Garbage Collector
+
+Go uses a **concurrent, tricolor mark-and-sweep** garbage collector. It runs alongside application goroutines rather than stopping the world (mostly).
+
+### How It Works
+
+**Phase 1: Mark Setup (STW)**
+A brief stop-the-world pause to enable the write barrier and scan goroutine stacks. Typically under 1ms.
+
+**Phase 2: Concurrent Mark**
+The GC marks all live objects. It uses a tricolor invariant:
+
+- **White** — not yet seen (candidate for collection)
+- **Grey** — seen but its references not yet scanned
+- **Black** — seen and all references scanned
+
+The GC starts with all roots (globals, goroutine stacks) as grey. It pops grey objects, scans their references, colors the references grey, then colors the object black. When no grey objects remain, all white objects are unreachable garbage.
+
+This runs **concurrently** with your goroutines — no full pause. The write barrier ensures that any pointer a running goroutine modifies during marking is captured correctly.
+
+**Phase 3: Mark Termination (STW)**
+A brief stop-the-world to finalize marking and disable the write barrier. Usually under 1ms.
+
+**Phase 4: Concurrent Sweep**
+Free the white (unreachable) objects' memory. Runs concurrently.
+
+### GC Tuning with GOGC
+
+`GOGC` controls when the GC triggers. Default is 100, meaning the GC runs when live heap doubles in size since the last collection.
+
+```bash
+GOGC=200 ./myapp  # run GC less frequently — higher memory, lower GC overhead
+GOGC=50  ./myapp  # run GC more frequently — lower memory, more GC overhead
+GOGC=off ./myapp  # disable GC entirely (dangerous)
+```
+
+In Go 1.19+, you can also set a soft memory limit:
+
+```bash
+GOMEMLIMIT=512MiB ./myapp
+```
+
+The runtime will work harder to stay under the limit, tuning GC frequency dynamically.
+
+### Escape Analysis
+
+The Go compiler decides whether a variable lives on the **stack** (fast, no GC pressure) or the **heap** (slower allocation, subject to GC). This is called escape analysis.
+
+```go
+func newFoo() *Foo {
+    f := Foo{} // f escapes to heap because we return a pointer
+    return &f
+}
+
+func processFoo(f Foo) int {
+    // f stays on stack — no pointer returned
+    return f.value * 2
+}
+```
+
+You can inspect escape analysis decisions:
+
+```bash
+go build -gcflags="-m" ./...
+```
+
+Minimize heap allocations in hot paths by:
+
+- Passing values instead of pointers where possible
+- Reusing objects with `sync.Pool`
+- Pre-allocating slices with `make([]T, 0, capacity)`
+
+### sync.Pool: Reducing Allocations
+
+```go
+var bufPool = sync.Pool{
+    New: func() interface{} {
+        return new(bytes.Buffer)
+    },
+}
+
+func processRequest() {
+    buf := bufPool.Get().(*bytes.Buffer)
+    defer func() {
+        buf.Reset()
+        bufPool.Put(buf)
+    }()
+
+    buf.WriteString("processing...")
+    // ...
+}
+```
+
+`sync.Pool` keeps a per-P cache of objects, reducing allocation pressure on hot paths.
+
+## Patterns I Use Daily
+
+**Fan-out:**
+
+```go
+func fanOut(input <-chan int, workers int) []<-chan int {
+    channels := make([]<-chan int, workers)
+    for i := range channels {
+        out := make(chan int)
+        channels[i] = out
+        go func() {
+            for v := range input {
+                out <- v * 2
+            }
+            close(out)
+        }()
+    }
+    return channels
+}
+```
+
+**Pipeline:**
+
+```go
+func generator(nums ...int) <-chan int {
+    out := make(chan int)
+    go func() {
+        for _, n := range nums {
+            out <- n
+        }
+        close(out)
+    }()
+    return out
+}
+
+func square(in <-chan int) <-chan int {
+    out := make(chan int)
+    go func() {
+        for n := range in {
+            out <- n * n
+        }
+        close(out)
+    }()
+    return out
+}
+
+// Usage
+for v := range square(generator(2, 3, 4)) {
+    fmt.Println(v) // 4, 9, 16
+}
+```
+
+## Key Takeaways
+
+- Goroutines are cheap; create them freely but always ensure they exit
+- Channels are for communication; mutexes are for protecting shared state — don't mix the idioms carelessly
+- `defer mu.Unlock()` always
+- The GC is concurrent and mostly non-blocking, but allocations still cost — profile with `pprof`
+- Use `sync.Pool` for objects that are frequently allocated and discarded on the hot path
+- Pass `context.Context` everywhere you do IO — it's how you handle timeouts and cancellation correctly
+
+Go's concurrency model is opinionated but powerful. Once the mental model clicks, writing safe concurrent code feels natural rather than error-prone.

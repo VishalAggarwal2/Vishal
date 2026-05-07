@@ -1,0 +1,204 @@
+---
+title: 'Operating System Internals'
+publishedAt: '2024-07-10'
+summary: 'OS fundamentals that every systems programmer should understand — processes, threads, memory management, scheduling, and system calls.'
+tag: 'OS'
+image: 'OS.png'
+draft: false
+---
+
+Operating systems are the layer that makes everything else possible. A deep understanding of OS concepts makes you a better programmer — you'll write faster code, debug harder problems, and understand why things behave the way they do in production.
+
+## Process vs Thread
+
+A **process** is an independent program in execution with its own:
+
+- Virtual address space
+- File descriptors
+- Heap and stack
+- Registers and program counter
+
+A **thread** is a unit of execution within a process. Threads in the same process share the heap and file descriptors, but each has its own stack and registers.
+
+```
+Process A                  Process B
+┌─────────────────┐        ┌─────────────────┐
+│ Code segment    │        │ Code segment    │
+│ Data segment    │        │ Data segment    │
+│ Heap            │        │ Heap            │
+│ Thread 1 Stack  │        │ Thread 1 Stack  │
+│ Thread 2 Stack  │        │ Thread 2 Stack  │
+└─────────────────┘        └─────────────────┘
+Isolated address spaces    Isolated from Process A
+```
+
+**Creating a process** (`fork()`) duplicates the parent's address space — expensive. Modern OSes use **copy-on-write**: the child shares parent pages until it writes to one, at which point a private copy is made.
+
+**Creating a thread** is much cheaper — only a new stack and register set are needed. The heap is shared immediately.
+
+**Communication:**
+
+- Between processes: pipes, sockets, shared memory, message queues (IPC)
+- Between threads: shared heap variables (protected by synchronization)
+
+## Process States
+
+A process moves through states managed by the OS scheduler:
+
+```
+New → Ready → Running → Waiting → Ready → Running → Terminated
+               ↑             ↓
+               └─────────────┘ (I/O or event complete)
+```
+
+- **New** — being created
+- **Ready** — in run queue, waiting for CPU
+- **Running** — currently executing on a CPU
+- **Waiting** — blocked on I/O, lock, or event
+- **Terminated** — finished execution
+
+A **context switch** saves the running process/thread's state (registers, PC, stack pointer) to its PCB (Process Control Block) and loads another process's state. Context switches are expensive — typically 1–10μs — because they flush CPU caches and TLB.
+
+## CPU Scheduling
+
+The scheduler decides which ready process gets the CPU next.
+
+**First-Come-First-Served (FCFS):** Simple but causes convoy effect — short jobs wait behind long ones.
+
+**Shortest Job First (SJF):** Optimal average wait time but requires knowing job duration (impractical). Preemptive version is called **SRTF** (Shortest Remaining Time First).
+
+**Round Robin:** Each process runs for a time quantum (typically 10–100ms), then preempted and put at the back of the queue. Good response time. Quantum size matters: too small = too many context switches, too large = becomes FCFS.
+
+**Priority Scheduling:** Each process has a priority. Higher priority runs first. Problem: **starvation** — low-priority processes never run. Fix: **aging** — gradually increase priority of waiting processes.
+
+**Multi-Level Feedback Queue (MLFQ):** Used by Linux and macOS. Multiple queues with different priorities and time quanta. New processes start at the top (shortest quantum). If they use their full quantum, drop to lower queue. I/O-bound processes stay at top (they voluntarily give up CPU). Approximates SJF without needing to know job length.
+
+**Completely Fair Scheduler (CFS) — Linux:**
+Uses a red-black tree ordered by **virtual runtime** (vruntime). The process with lowest vruntime runs next. Vruntime advances proportional to time run, inversely proportional to weight (nice value). Achieves fairness while having O(log N) scheduling decisions.
+
+## Memory Management
+
+Each process operates on a **virtual address space** — a private view of memory isolated from other processes. The OS and CPU work together to translate virtual addresses to physical addresses.
+
+### Paging
+
+Physical memory is divided into **frames** (fixed-size blocks, e.g., 4KB). Virtual memory is divided into **pages** of the same size. The OS maintains a **page table** mapping virtual pages to physical frames.
+
+```
+Virtual Address:  [ Page Number | Offset ]
+                        ↓ (page table lookup)
+Physical Address: [ Frame Number | Offset ]
+```
+
+The **TLB** (Translation Lookaside Buffer) is a hardware cache for page table entries. A TLB hit avoids the full page table walk. TLB misses are expensive — this is why large pages (hugepages, 2MB or 1GB) can significantly improve performance for large working sets.
+
+### Demand Paging and Page Faults
+
+Pages are loaded into memory only when accessed — **demand paging**. If a process accesses a virtual address whose page isn't in memory:
+
+1. CPU raises a **page fault** interrupt
+2. OS finds the page on disk (swap space or executable file)
+3. OS loads the page into a free frame
+4. OS updates the page table
+5. Instruction that caused the fault is restarted
+
+Page faults are expensive (~10ms for disk access). If the system runs low on memory and pages in and out constantly, it **thrashes** — spending more time on paging than actual computation.
+
+### Page Replacement Algorithms
+
+When physical memory is full and a new page must be loaded:
+
+**LRU (Least Recently Used):** Evict the page not accessed for the longest time. Optimal in theory but expensive to track exactly. Approximated with a clock algorithm or reference bits.
+
+**Clock Algorithm:** Arrange pages in a circular list. Each has a reference bit. On access, set bit to 1. When choosing a victim, advance the clock pointer; evict the first page with bit 0, clearing bit 1 as you go.
+
+**Working Set Model:** Track each process's **working set** — the set of pages used in the last window of time. Keep the working set in memory; evict pages outside it. Prevents thrashing.
+
+## Virtual Memory and mmap
+
+`mmap()` maps a file (or anonymous memory) directly into a process's virtual address space:
+
+```c
+void *ptr = mmap(NULL, length, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+```
+
+Uses:
+
+- **Memory-mapped files**: read/write files as if they're in memory — OS handles paging to/from disk
+- **Shared memory between processes**: MAP_SHARED maps same physical pages into multiple address spaces
+- **Large allocations**: `malloc` uses `mmap` for large blocks
+
+This is how databases like SQLite, PostgreSQL, and RocksDB work internally — they `mmap` their data files.
+
+## System Calls
+
+A system call is how a user-space program requests a privileged operation from the kernel.
+
+```
+User Space:    int fd = open("file.txt", O_RDONLY);
+                            ↓
+Kernel Space:  sys_open() — checks permissions, allocates file descriptor, returns fd
+```
+
+The CPU switches from **user mode** to **kernel mode** — a privileged mode where it can access hardware. This mode switch is expensive: ~1–2μs, plus you flush the TLB if needed.
+
+Common syscalls:
+
+- **Process**: `fork()`, `exec()`, `exit()`, `wait()`
+- **File**: `open()`, `read()`, `write()`, `close()`, `mmap()`
+- **Network**: `socket()`, `bind()`, `connect()`, `accept()`
+- **Synchronization**: `futex()` (the foundation of pthread mutexes)
+
+Modern programs minimize syscalls for performance. `read()` on a hot file repeatedly would be slow — that's why the kernel has a **page cache**: recently read file pages are kept in memory so subsequent reads don't hit disk.
+
+## File Systems
+
+A file system organizes data on storage into a hierarchical structure.
+
+**inode**: metadata for a file — permissions, owner, timestamps, size, and pointers to data blocks. A directory maps file names to inode numbers.
+
+**Journaling** (ext4, APFS, NTFS): before modifying metadata, write the intended change to a journal (write-ahead log). If the system crashes mid-write, replay the journal on next mount. Prevents file system corruption.
+
+**Copy-on-Write file systems** (ZFS, Btrfs): never modify data in place. Write new version, update pointers, free old version. Enables atomic snapshots at near zero cost.
+
+## I/O Models
+
+**Blocking I/O**: thread blocks until I/O completes. Simple but wastes CPU.
+
+**Non-blocking I/O**: `O_NONBLOCK` flag — `read()` returns immediately with `EAGAIN` if no data. Application must poll repeatedly.
+
+**I/O Multiplexing** (`select`, `poll`, `epoll`): monitor multiple file descriptors, block until at least one is ready. `epoll` is O(1) for event notification (vs O(n) for `select`). This is how Node.js, Nginx, and Redis handle thousands of connections with one thread.
+
+**Async I/O** (`io_uring` on Linux): submit I/O operations to a ring buffer, get completions without any syscall per operation. Near zero overhead. Used by modern databases and high-performance servers.
+
+## Signals
+
+Signals are software interrupts sent to processes:
+
+```c
+signal(SIGINT, handler);  // Ctrl+C
+signal(SIGTERM, handler); // graceful shutdown
+signal(SIGKILL, ...);     // cannot be caught — instant kill
+```
+
+Graceful shutdown pattern:
+
+```go
+quit := make(chan os.Signal, 1)
+signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+<-quit
+// drain request queue, close DB connections, flush logs
+```
+
+## Key Takeaways
+
+- Processes are isolated; threads share heap — shared memory is both efficient and dangerous
+- Context switches cost ~1–10μs; avoid them in hot paths by using async I/O
+- Virtual memory + paging lets every process have its own address space; TLB caches translations
+- Page faults are expensive — keep your working set in memory to avoid thrashing
+- `epoll` / `io_uring` are how modern servers handle high concurrency without proportional threads
+- File system journaling prevents corruption on crashes — understand fsync() vs write()
+- Syscalls cross the user/kernel boundary — batch them and use `mmap` for file I/O in performance-critical code
+
+Operating system internals aren't just academic. Every time you tune thread pool size, choose between blocking and async I/O, or debug a memory issue in production, you're applying this knowledge.

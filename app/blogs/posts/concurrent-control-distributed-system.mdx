@@ -1,0 +1,263 @@
+---
+title: 'Concurrent Control in Distributed Systems'
+publishedAt: '2024-06-20'
+summary: 'A practical exploration of concurrency control strategies — locking, MVCC, optimistic concurrency, and event-driven patterns in distributed architectures.'
+tag: 'Distributed Systems'
+image: 'Bookmyshow concurrency control.png'
+draft: false
+---
+
+One of the most underrated challenges in building distributed systems is concurrency control — ensuring that concurrent operations on shared state produce correct results. I've used BookMyShow as a reference architecture here because ticket booking is a textbook case of extreme concurrency challenges: thousands of users trying to book the same seat simultaneously.
+
+## The Core Problem
+
+Imagine 1,000 users open the BookMyShow seat selection page at the same time. Seat A3 shows as available for all of them. 1,000 users click "Book" simultaneously. Only one can succeed. The system must:
+
+1. Guarantee only one user books A3
+2. Show correct availability to other users
+3. Handle failures without leaving partial state
+4. Maintain this at scale across thousands of shows
+
+This is a concurrency control problem.
+
+## Pessimistic Locking
+
+The classic approach: lock the resource before you touch it. No other transaction can see or modify it until you're done.
+
+```sql
+BEGIN;
+
+-- Lock the seat row exclusively
+SELECT * FROM seats
+WHERE show_id = 1001 AND seat_id = 'A3' AND status = 'AVAILABLE'
+FOR UPDATE;
+
+-- If we got here, we have the lock
+UPDATE seats SET status = 'BOOKED', user_id = 42
+WHERE show_id = 1001 AND seat_id = 'A3';
+
+COMMIT;
+```
+
+`SELECT FOR UPDATE` in PostgreSQL locks the row until the transaction commits or rolls back. Concurrent attempts to lock the same row will block.
+
+**Pros:** Simple, correct, works with any data model.
+
+**Cons:** Under high contention, threads pile up waiting for locks. For BookMyShow, a popular show could have thousands of lock waiters. Throughput collapses.
+
+**Where I use it:** Low-contention critical sections, financial transactions where correctness is absolute priority.
+
+## Optimistic Locking
+
+Instead of locking before the operation, proceed without a lock and detect conflicts at commit time using a version number.
+
+```sql
+-- Read with version
+SELECT id, seat_id, status, version FROM seats
+WHERE show_id = 1001 AND seat_id = 'A3';
+-- Returns: version = 5
+
+-- Update only if version hasn't changed
+UPDATE seats
+SET status = 'BOOKED', user_id = 42, version = version + 1
+WHERE show_id = 1001 AND seat_id = 'A3' AND version = 5;
+
+-- If 0 rows affected: conflict — someone else modified it
+```
+
+At the application layer:
+
+```java
+@Retryable(value = OptimisticLockException.class, maxAttempts = 3)
+public void bookSeat(Long showId, String seatId, Long userId) {
+    Seat seat = seatRepository.findByShowAndSeatId(showId, seatId);
+    if (!seat.isAvailable()) throw new SeatUnavailableException();
+
+    seat.setStatus(BOOKED);
+    seat.setUserId(userId);
+    // version field checked automatically by JPA @Version
+    seatRepository.save(seat); // throws OptimisticLockException if version mismatch
+}
+```
+
+JPA handles this with `@Version`:
+
+```java
+@Entity
+public class Seat {
+    @Version
+    private Long version;
+    // ...
+}
+```
+
+**Pros:** No lock contention at read time. Scales well when conflicts are rare.
+
+**Cons:** Under high contention (BookMyShow prime time), you get a high conflict rate and many retries. At extreme scale, optimistic locking degrades.
+
+## Distributed Locking with Redis
+
+When your data is sharded across multiple databases or you need a lock that spans multiple services, you need a distributed lock.
+
+Redis-based locks with the Redlock algorithm:
+
+```java
+RLock lock = redisson.getLock("seat:1001:A3");
+
+boolean acquired = lock.tryLock(5, 10, TimeUnit.SECONDS); // waitTime, leaseTime
+if (!acquired) {
+    throw new SeatTemporarilyUnavailableException();
+}
+
+try {
+    // critical section
+    bookSeat(showId, seatId, userId);
+} finally {
+    lock.unlock();
+}
+```
+
+**TTL is critical:** the lock must expire automatically in case the holder crashes — otherwise it becomes a deadlock. Set it to the maximum time a booking operation should take.
+
+**For BookMyShow:** When a user selects a seat, we acquire a distributed lock for 10 minutes (the payment window). Other users see the seat as "held." If payment succeeds, seat status changes to BOOKED. If payment fails or times out, lock expires, seat becomes available again.
+
+## Optimistic Concurrency with Compare-And-Swap
+
+For in-memory or Redis-backed state, CAS provides lock-free concurrency:
+
+```python
+# Redis CAS pattern using WATCH
+def book_seat(show_id, seat_id, user_id):
+    with redis.pipeline() as pipe:
+        while True:
+            try:
+                pipe.watch(f"seat:{show_id}:{seat_id}")
+                current = pipe.get(f"seat:{show_id}:{seat_id}")
+
+                if current != b"AVAILABLE":
+                    raise SeatUnavailableException()
+
+                pipe.multi()  # start transaction
+                pipe.set(f"seat:{show_id}:{seat_id}", f"BOOKED:{user_id}")
+                pipe.execute()  # will fail if watched key changed
+                return True
+            except WatchError:
+                continue  # retry
+```
+
+## Event Sourcing and Saga for Booking Flows
+
+BookMyShow's booking involves multiple steps: reserve seat → create order → charge payment → confirm. If payment fails, you need to release the seat. Distributed transactions (2PC) are too slow for this at scale.
+
+**Saga Pattern:**
+
+```
+1. ReserveSeatCommand → SeatReservedEvent
+2. CreateOrderCommand → OrderCreatedEvent
+3. ChargePaymentCommand → PaymentSucceededEvent | PaymentFailedEvent
+4a. On PaymentSucceeded: ConfirmBookingCommand → BookingConfirmedEvent
+4b. On PaymentFailed: ReleaseSeatsCommand → SeatsReleasedEvent (compensating)
+```
+
+Each step publishes a domain event to Kafka. Downstream services react. If a step fails, compensating transactions undo previous steps. This is choreography-based saga.
+
+For orchestration-based saga (one coordinator manages all steps):
+
+```java
+@Saga
+public class BookingSaga {
+    @StartSaga
+    @SagaEventHandler(associationProperty = "bookingId")
+    public void handle(BookingInitiatedEvent event) {
+        commandGateway.send(new ReserveSeatCommand(event.getShowId(), event.getSeatId()));
+    }
+
+    @SagaEventHandler(associationProperty = "bookingId")
+    public void handle(SeatReservedEvent event) {
+        commandGateway.send(new ChargePaymentCommand(event.getOrderId(), event.getAmount()));
+    }
+
+    @SagaEventHandler(associationProperty = "bookingId")
+    public void handle(PaymentFailedEvent event) {
+        commandGateway.send(new ReleaseSeatCommand(event.getShowId(), event.getSeatId()));
+        SagaLifecycle.end();
+    }
+}
+```
+
+## Queue-Based Serialization
+
+At truly massive scale, you serialize all booking requests for a given show through a single queue. No locks, no conflicts — only one booking is processed at a time per show.
+
+```
+User Request → API Gateway → Booking Queue (per show) → Booking Worker → DB
+```
+
+```java
+@KafkaListener(topics = "bookings", topicPartitions = {
+    @TopicPartition(topic = "bookings", partitions = {"0"}) // one partition per popular show
+})
+public void processBooking(BookingRequest request) {
+    // Sequential processing — no concurrency for this show
+    Seat seat = seatRepository.findAndLock(request.getShowId(), request.getSeatId());
+    if (seat.isAvailable()) {
+        seat.book(request.getUserId());
+        seatRepository.save(seat);
+        notifyUser(request.getUserId(), "SUCCESS");
+    } else {
+        notifyUser(request.getUserId(), "SEAT_UNAVAILABLE");
+    }
+}
+```
+
+The Kafka partition key is the show ID — all bookings for the same show go to the same partition, processed sequentially. This eliminates contention at the cost of reduced parallelism per show.
+
+## Idempotency: Handling Retries Safely
+
+Network failures mean clients retry. You must handle duplicate requests:
+
+```java
+public BookingResponse book(BookingRequest request) {
+    // Check idempotency key first
+    Optional<BookingResponse> existing = idempotencyStore.get(request.getIdempotencyKey());
+    if (existing.isPresent()) return existing.get();
+
+    // Process the booking
+    BookingResponse response = processBooking(request);
+
+    // Store result against the idempotency key
+    idempotencyStore.put(request.getIdempotencyKey(), response, Duration.ofHours(24));
+
+    return response;
+}
+```
+
+The idempotency key (UUID generated by the client) ensures that retried requests return the same result without double-processing.
+
+## Read Scaling with CQRS
+
+Booking writes are complex and need strong consistency. But reads (checking seat availability, browsing shows) are far more frequent and can tolerate slight staleness.
+
+Command Query Responsibility Segregation (CQRS):
+
+```
+Write Path: BookingCommand → Booking Service → PostgreSQL (source of truth)
+                                               ↓ domain events
+Read Path:  AvailabilityQuery → Redis Cache ← Event Consumer (updates on booking events)
+```
+
+The read side is eventually consistent — Redis might show a seat as available for a few hundred milliseconds after it's been booked. That's acceptable for browsing. The actual booking attempt uses the consistent write path with a lock.
+
+This pattern let us handle 10x the read throughput without touching the write path.
+
+## Key Takeaways
+
+- Pessimistic locking is correct but kills throughput under high contention
+- Optimistic locking scales better when conflicts are rare — retries are cheap
+- Distributed locks (Redis) work across services but require careful TTL management
+- Saga pattern replaces 2PC for multi-step workflows — design compensating transactions upfront
+- Queue-based serialization eliminates contention by removing parallelism for a resource
+- Idempotency is non-negotiable for any operation that can be retried
+- CQRS separates the scalability concerns of reads vs writes
+
+Concurrency control is about choosing the right trade-off between correctness, latency, and throughput for your specific access patterns. There is no universally best approach — only context-dependent good ones.

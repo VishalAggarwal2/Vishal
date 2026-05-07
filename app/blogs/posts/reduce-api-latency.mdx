@@ -1,0 +1,249 @@
+---
+title: 'How I Reduced API Latency from 200ms to 20ms'
+publishedAt: '2024-05-12'
+summary: 'Practical techniques that slashed API response times by 10x in a production backend — profiling, caching, query optimization, and connection pooling.'
+tag: 'Performance'
+image: 'Reduce Latency.png'
+draft: false
+---
+
+200ms felt acceptable until our user base grew and p99 latency crept past 800ms. This is the story of how I diagnosed and fixed our API layer to get median response times down to 20ms — a 10x improvement — without rewriting the service.
+
+## Start With Measurement
+
+You cannot optimize what you don't measure. Before touching any code, I instrumented every API endpoint properly.
+
+```java
+// Spring Boot + Micrometer — add a timer around every controller
+@Around("@annotation(org.springframework.web.bind.annotation.GetMapping)")
+public Object measureLatency(ProceedingJoinPoint pjp) throws Throwable {
+    long start = System.nanoTime();
+    try {
+        return pjp.proceed();
+    } finally {
+        long duration = System.nanoTime() - start;
+        registry.timer("http.request", "endpoint", pjp.getSignature().getName())
+                .record(duration, TimeUnit.NANOSECONDS);
+    }
+}
+```
+
+I also added **distributed tracing** with OpenTelemetry so I could see exactly where time was spent: serialization, database, external HTTP calls, business logic.
+
+The first flamegraph was revealing — 75% of latency was in database queries.
+
+## Problem 1: N+1 Queries
+
+The classic performance killer. Our code fetched a list of orders, then for each order made a separate query to fetch the user.
+
+```java
+// Bad — N+1
+List<Order> orders = orderRepository.findAll();
+orders.forEach(order -> {
+    User user = userRepository.findById(order.getUserId()); // N queries
+    order.setUserName(user.getName());
+});
+```
+
+**Fix: JOIN in the query**
+
+```sql
+SELECT o.*, u.name AS user_name
+FROM orders o
+JOIN users u ON o.user_id = u.id
+WHERE o.status = 'PENDING';
+```
+
+Or with JPA, use `@EntityGraph` or JPQL fetch joins:
+
+```java
+@Query("SELECT o FROM Order o JOIN FETCH o.user WHERE o.status = :status")
+List<Order> findByStatusWithUser(@Param("status") String status);
+```
+
+This reduced 47 queries down to 1. Latency for that endpoint dropped from 180ms to 40ms immediately.
+
+## Problem 2: Missing Database Indexes
+
+I ran `EXPLAIN ANALYZE` on every slow query and found several full table scans.
+
+```sql
+EXPLAIN ANALYZE
+SELECT * FROM orders WHERE user_id = 12345 AND status = 'PENDING';
+
+-- Output showed: Seq Scan on orders (cost=0.00..8943.12 rows=23 ...)
+```
+
+Adding a composite index:
+
+```sql
+CREATE INDEX CONCURRENTLY idx_orders_user_status
+ON orders (user_id, status);
+```
+
+After the index: `Index Scan` instead of `Seq Scan`. The query went from 90ms to 2ms.
+
+Rules I follow for indexes:
+
+- Index columns used in `WHERE`, `JOIN ON`, and `ORDER BY`
+- Composite indexes: put the most selective column first, unless you have range queries
+- Use `CREATE INDEX CONCURRENTLY` in production to avoid table locks
+- Don't over-index — each index slows down writes
+
+## Problem 3: Serializing Too Much Data
+
+Our user profile endpoint was fetching 60 columns from the database and serializing the entire entity, but the UI only used 5 fields.
+
+**Fix: Projections / DTOs**
+
+```java
+// JPA projection — fetch only what you need
+public interface UserSummary {
+    Long getId();
+    String getName();
+    String getEmail();
+}
+
+List<UserSummary> findByStatus(String status);
+```
+
+Fetching fewer columns reduced data transfer from DB to app, reduced serialization time, and reduced network payload.
+
+Endpoint payload dropped from 8KB to 400 bytes. Combined with response compression, this cut network time by 60%.
+
+## Problem 4: No Caching
+
+The most frequently hit endpoints — product catalog, user preferences, configuration data — were hitting the database on every request even though the data changed rarely.
+
+**Layer 1: In-memory cache with Caffeine**
+
+```java
+@Bean
+public CacheManager cacheManager() {
+    CaffeineCacheManager manager = new CaffeineCacheManager();
+    manager.setCaffeine(Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(5, TimeUnit.MINUTES)
+        .recordStats());
+    return manager;
+}
+
+@Cacheable(value = "products", key = "#categoryId")
+public List<Product> getProductsByCategory(Long categoryId) {
+    return productRepository.findByCategoryId(categoryId);
+}
+```
+
+Cache hit rate reached 85% for the product catalog. Average latency for that endpoint: 180ms → 3ms.
+
+**Layer 2: Redis for shared cache across instances**
+
+For data that multiple app instances need to share (sessions, rate limit counters, distributed locks):
+
+```java
+@Cacheable(value = "userPreferences", key = "#userId", cacheManager = "redisCacheManager")
+public UserPreferences getUserPreferences(Long userId) {
+    return preferencesRepository.findByUserId(userId);
+}
+```
+
+Set TTL thoughtfully. For product prices: 1 minute. For user profile: 15 minutes. For static config: 1 hour.
+
+## Problem 5: Connection Pool Misconfiguration
+
+Our HikariCP pool was configured with defaults: 10 connections. Under load, threads were waiting for a connection to become available.
+
+Profiling showed threads spending 30–50ms just waiting for a DB connection.
+
+```yaml
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 20 # based on DB capacity
+      minimum-idle: 5
+      connection-timeout: 3000 # fail fast, don't queue indefinitely
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+```
+
+Formula for pool size: `connections = (core_count * 2) + effective_spindle_count`. For a 4-core app server talking to a remote DB: ~10 connections. We had 2 app instances, so 20 total was right.
+
+After tuning: connection wait time dropped to ~0ms under normal load.
+
+## Problem 6: Synchronous Calls to External Services
+
+One endpoint was calling three external services sequentially:
+
+```java
+// Sequential — takes sum of all service latencies
+UserProfile profile = userService.getProfile(userId);   // 30ms
+List<Order> orders = orderService.getOrders(userId);    // 40ms
+List<Coupon> coupons = couponService.getCoupons(userId); // 25ms
+// Total: ~95ms just in external calls
+```
+
+**Fix: Parallel execution with CompletableFuture**
+
+```java
+CompletableFuture<UserProfile> profileFuture =
+    CompletableFuture.supplyAsync(() -> userService.getProfile(userId), executor);
+
+CompletableFuture<List<Order>> ordersFuture =
+    CompletableFuture.supplyAsync(() -> orderService.getOrders(userId), executor);
+
+CompletableFuture<List<Coupon>> couponsFuture =
+    CompletableFuture.supplyAsync(() -> couponService.getCoupons(userId), executor);
+
+CompletableFuture.allOf(profileFuture, ordersFuture, couponsFuture).join();
+// Total: ~40ms (the slowest one)
+```
+
+This reduced that endpoint from 95ms to 40ms in external call time alone.
+
+## Problem 7: Serialization Overhead
+
+We were using Jackson with default configuration. On high-traffic endpoints with large payloads, Jackson was a non-trivial cost.
+
+Fixes:
+
+- Use `ObjectMapper` as a singleton bean, not re-instantiated per request
+- Enable `JsonAutoDetect` to serialize only what's needed
+- For internal service-to-service calls, consider Protobuf or MessagePack instead of JSON
+- Use `@JsonInclude(NON_NULL)` to skip null fields
+
+```java
+@Bean
+public ObjectMapper objectMapper() {
+    return new ObjectMapper()
+        .setSerializationInclusion(JsonInclude.Include.NON_NULL)
+        .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+        .registerModule(new JavaTimeModule());
+}
+```
+
+## Results
+
+| Problem                   | Before       | After           |
+| ------------------------- | ------------ | --------------- |
+| N+1 queries               | 180ms        | 40ms            |
+| Missing indexes           | 90ms         | 2ms             |
+| Over-fetching             | 8KB payload  | 400B payload    |
+| No caching                | 180ms        | 3ms (cache hit) |
+| Pool misconfiguration     | 30-50ms wait | ~0ms            |
+| Sequential external calls | 95ms         | 40ms            |
+
+**Overall median latency: 200ms → 20ms**
+
+The biggest wins came from the database layer — indexes and eliminating N+1 queries. Caching was second. Parallelizing external calls was the finishing touch.
+
+## Key Takeaways
+
+- Measure first. Flamegraphs and distributed traces point to the real bottleneck.
+- N+1 queries are silent killers — always check generated SQL with `show-sql: true` or a query profiler.
+- `EXPLAIN ANALYZE` is your best friend for slow queries.
+- Cache strategically — not everything, but anything with high read frequency and low write frequency.
+- Parallel external calls with `CompletableFuture.allOf` — easy win when you have independent service calls.
+- Connection pool tuning matters more than most people think.
+
+Latency optimization is almost never about rewriting code from scratch. It's about understanding where time is actually being spent and eliminating the waste systematically.

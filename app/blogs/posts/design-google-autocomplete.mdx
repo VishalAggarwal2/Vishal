@@ -1,0 +1,259 @@
+---
+title: 'Design Google Autocomplete System'
+publishedAt: '2024-09-25'
+summary: 'Building a type-ahead search system with tries, real-time ranking, and low-latency delivery at scale — the way Google and Bing do it.'
+tag: 'System Design'
+image: 'AutocompleteSystem.png'
+draft: false
+---
+
+Type-ahead search suggestions appear as you type, showing completions in under 100ms even under millions of concurrent users. Building this system is a great exercise in data structures, ranking, caching, and performance optimization.
+
+## Functional Requirements
+
+- Return top 5 suggestions for a given prefix as the user types
+- Suggestions ranked by popularity (search frequency)
+- Suggestions updated in near real-time as search trends change
+- Support queries of up to 255 characters
+
+## Non-Functional Requirements
+
+- 10 billion searches per day → ~116,000 queries per second
+- p99 latency < 100ms for suggestions
+- Suggestions update within 30 minutes of trending searches
+- System is read-heavy (suggestions) with background writes (analytics)
+
+## Core Data Structure: Trie
+
+A **trie** (prefix tree) is the canonical data structure for autocomplete. Each node represents a character. The path from root to a node spells out a prefix. Each terminal node stores completion metadata.
+
+```
+           root
+          / | \
+         g  b  a
+         |  |  |
+         o  e  p
+         |  |  |
+        (go)(be)(ap)
+        /        \
+       o           p
+       |           |
+      (goo)       (app)
+       |
+      gle
+      (google)
+```
+
+**Storing top suggestions per node:**
+
+Instead of traversing to all children to find suggestions (expensive), each node stores the top K (e.g., 5) completions with their scores:
+
+```
+node["go"] → [
+    ("google", score: 1,000,000),
+    ("google maps", score: 850,000),
+    ("golang", score: 200,000),
+    ("google translate", score: 180,000),
+    ("goodreads", score: 90,000)
+]
+```
+
+Lookup for prefix "go": O(len("go")) = O(1) for short prefixes. No tree traversal needed.
+
+**Space trade-off:** Storing top K at every node means K × number_of_nodes entries. For a trie with millions of nodes and K=5, this is manageable.
+
+## Ranking
+
+Suggestions aren't just alphabetical — they're ranked by relevance. Factors:
+
+1. **Search frequency** — how often this query was searched globally
+2. **Recency** — recent searches get a boost (trending topics)
+3. **Personalization** — your own search history (optional)
+4. **Geography** — local events get local boosts
+
+A simple score:
+
+```
+score(query) = frequency_7days × recency_weight × geo_weight
+```
+
+For a production system, a more sophisticated ranking model uses ML features. But frequency-based ranking covers 80% of the value.
+
+## System Architecture
+
+```
+User types prefix
+     ↓
+API Gateway
+     ↓
+Suggestion Service
+     ├── Check Redis cache (hot prefix → suggestions)
+     ├── On miss: query Trie Service
+     └── Return top 5 suggestions
+
+Background pipeline:
+Search events → Kafka → Aggregation Job → Trie Builder → Redis/Trie Store
+```
+
+## The Aggregation Pipeline
+
+Every search generates an event. We aggregate these to update scores:
+
+**Real-time path (streaming):**
+
+```
+Search event → Kafka → Flink/Spark Streaming →
+    Increment frequency count in Redis →
+    If count crosses threshold → trigger trie update
+```
+
+**Batch path:**
+
+```
+Daily log dump → Hadoop MapReduce → Frequency table →
+    Rebuild trie → Atomically swap with production trie
+```
+
+The batch job rebuilds the full trie daily. The streaming job handles real-time trending (queries that spike suddenly).
+
+**Aggregation with time decay:**
+
+```python
+def get_score(query):
+    return (
+        count_last_hour * 3.0 +
+        count_last_day * 1.5 +
+        count_last_week * 1.0
+    )
+```
+
+Recent searches count more — this keeps the system responsive to trends.
+
+## Storage: Trie Serialization
+
+A trie is built in memory but must be persisted. Serialization options:
+
+**Approach 1 — Serialize to bytes:**
+Traverse the trie and write each node as `[char, num_children, top_k_completions]`. Compact, fast to deserialize. Stored in S3 or a distributed file system.
+
+**Approach 2 — Store in Redis Hash:**
+Each prefix maps to its top 5 suggestions as a Redis hash:
+
+```
+HSET autocomplete:go golang 200000 google 1000000 ...
+HGETALL autocomplete:go → sorted top 5
+```
+
+Redis approach enables O(1) lookup and easy partial updates. For a system serving 100K+ queries per second, Redis can handle this with multiple replicas.
+
+**Approach 3 — Distributed Trie:**
+Shard the trie by first character (or first two characters for better balance). Each shard is an in-memory trie on a dedicated server.
+
+For Google-scale, approach 3 with in-memory tries per shard plus Redis caching of hot prefixes is the right answer.
+
+## Caching Strategy
+
+Query distribution follows a Zipfian distribution — a small number of prefixes account for most queries. "g", "go", "goo", "goog", "googl", "google" are all searched billions of times per day.
+
+Cache the top 10,000 prefixes in Redis. This covers ~90% of all traffic:
+
+```python
+def get_suggestions(prefix):
+    # Check cache first
+    cached = redis.get(f"ac:{prefix}")
+    if cached:
+        return json.loads(cached)
+
+    # Cache miss — query trie
+    suggestions = trie_service.lookup(prefix)
+
+    # Cache result with TTL proportional to prefix length
+    # Shorter prefixes change more frequently
+    ttl = 60 if len(prefix) <= 3 else 300
+    redis.set(f"ac:{prefix}", json.dumps(suggestions), ex=ttl)
+
+    return suggestions
+```
+
+## Client-Side Optimizations
+
+The client is part of the performance story:
+
+**Debouncing:** Don't send a request for every keystroke. Wait 50–100ms after the last keystroke before sending:
+
+```javascript
+const debouncedSearch = debounce((query) => {
+  fetchSuggestions(query).then(display);
+}, 100);
+
+searchInput.addEventListener('input', (e) => debouncedSearch(e.target.value));
+```
+
+**Client cache:** Cache recent queries in the browser. If the user types "go", gets suggestions, then types "goo", check if "goo" is a prefix of a cached result before making a network request.
+
+**Prefetching:** When the user pauses on "goo", prefetch "goog" in the background.
+
+**HTTP keep-alive:** Reuse the TCP connection for all suggestion requests during a session.
+
+## Handling Special Cases
+
+**Multilingual support:** Build separate tries per language. Detect language from browser locale or previous searches. Route to the appropriate trie.
+
+**Spell correction:** Fuzzy matching using edit distance. For short queries (< 4 chars), exact match only. For longer queries, allow 1–2 character edits for suggestions. Pre-compute common misspellings and map them to corrections.
+
+**Filters:** "youtube" and "youtube kids" might need different suggestion sets based on SafeSearch settings. Maintain separate suggestion profiles or filter post-fetch.
+
+**Offensive queries:** Maintain a blocklist. Filter suggestions before returning. This is a separate concern from ranking.
+
+## Trie Updates: Hot Swap
+
+The trie is rebuilt periodically. Swapping it without downtime:
+
+1. Background job builds a new trie
+2. Writes new trie to the "standby" slot
+3. Atomically updates a pointer from "active" to "standby"
+4. All new reads use the new trie
+
+In Redis terms:
+
+```
+RENAME autocomplete_v2 autocomplete  # atomic rename
+```
+
+With in-memory tries, use a read-write lock. Write the new trie, then acquire the write lock for < 1ms to swap the pointer.
+
+## Scale Analysis
+
+**Storage:**
+
+- English vocabulary: ~100,000 common queries
+- Average query length: 15 chars
+- Trie nodes: ~200,000 (with shared prefixes)
+- Per node: 5 suggestions × 50 bytes = 250 bytes
+- Total trie: 200,000 × 250 bytes = 50MB — fits entirely in memory
+
+**Throughput:**
+
+- 116,000 queries/second
+- Redis cluster with 10 nodes → 11,600 QPS per node — easily handled
+- CDN edge caching for static prefix responses further reduces origin load
+
+**Latency budget:**
+
+```
+Network (client to edge): 20ms
+Edge cache hit: 1ms
+Cache miss → Suggestion service: 5ms
+Redis lookup: 2ms
+Total (cache miss): ~28ms  ✓ well under 100ms
+```
+
+## Key Takeaways
+
+- Trie with precomputed top-K completions per node → O(prefix_length) lookup
+- Score = frequency × recency × geo — simple weighted formula covers most cases
+- Two-tier aggregation: streaming (Flink) for real-time trends + batch (MapReduce) for full rebuild
+- Redis caches hot prefixes; in-memory tries serve the rest
+- Client debouncing (100ms) + browser-side caching dramatically reduces request volume
+- Hot-swap the trie atomically — no downtime during updates
+- Separate concerns: ranking logic from completion retrieval from spell correction

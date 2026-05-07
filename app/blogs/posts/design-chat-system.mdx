@@ -1,0 +1,256 @@
+---
+title: 'Design a Chat System'
+publishedAt: '2024-08-05'
+summary: 'System design walkthrough for building a scalable real-time chat platform — WebSockets, message storage, fan-out, and presence at scale.'
+tag: 'System Design'
+image: 'chatsystem.png'
+draft: false
+---
+
+Designing a chat system is a classic system design problem that touches real-time communication, storage, fan-out, and presence. Let me walk through how I'd design a system similar to WhatsApp or Slack.
+
+## Functional Requirements
+
+- One-on-one messaging
+- Group chat (up to 500 members)
+- Message delivery: sent, delivered, read receipts
+- Online/offline presence
+- Message history
+- Media messages (images, files)
+
+## Non-Functional Requirements
+
+- 50 million daily active users
+- Each user sends ~40 messages/day → ~23,000 messages/second
+- Messages delivered with < 100ms latency
+- 5 years message retention
+- 99.99% availability
+
+## High-Level Architecture
+
+```
+Client ←→ Chat Service (WebSocket servers)
+             ↓
+        Message Queue (Kafka)
+             ↓
+        Message Storage (Cassandra)
+        Presence Service (Redis)
+        Notification Service
+```
+
+## Real-Time Communication: WebSockets
+
+HTTP is request-response — the server can't push to the client without a request. For chat, we need bi-directional, low-latency communication. **WebSockets** are the right choice.
+
+A WebSocket connection starts as an HTTP upgrade request:
+
+```
+GET /chat HTTP/1.1
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+```
+
+Once upgraded, both sides can send frames at any time. A single TCP connection stays open for the duration of the session.
+
+**Server-Sent Events (SSE)** is an alternative for one-way push (server to client). Good for notifications but not for bidirectional chat.
+
+**Long Polling** is a fallback: client sends request, server holds it open until data is available, client immediately re-requests. Higher latency and overhead than WebSocket.
+
+## Connection Management
+
+With 50M DAUs and users typically connected for hours, we need millions of concurrent WebSocket connections. No single server handles this — we need a **WebSocket server fleet** behind a load balancer.
+
+Problem: messages must be routed to the right WebSocket server (the one holding the recipient's connection).
+
+Solution: a **connection registry** in Redis:
+
+```
+user_id → server_id (the WebSocket server holding this user's connection)
+```
+
+When Alice sends a message to Bob:
+
+1. Alice's server receives the message
+2. Looks up Bob's `server_id` in Redis
+3. Sends the message to Bob's server via internal pub/sub (Redis pub/sub or Kafka)
+4. Bob's server pushes to Bob's WebSocket connection
+
+## Message Flow
+
+```
+Alice types message
+     ↓
+Alice's WS server receives it
+     ↓
+Publish to Kafka topic "messages" (async, non-blocking)
+     ↓ (parallel)
+     ├── Message Storage Service → Cassandra
+     └── Fan-out Service → find recipients' WS servers → deliver
+```
+
+Using Kafka as the message bus decouples sending from processing. The sender gets an ACK immediately. Storage and delivery happen asynchronously.
+
+## Message Storage: Cassandra
+
+Why Cassandra?
+
+- Write-heavy workload (every message is a write)
+- Need fast range reads for "load last 100 messages"
+- Horizontal scaling via sharding
+- High availability with no single point of failure
+
+Schema design — model around access patterns:
+
+```sql
+CREATE TABLE messages (
+    conversation_id UUID,
+    message_id      TIMEUUID,  -- includes timestamp, sortable
+    sender_id       UUID,
+    content         TEXT,
+    message_type    TEXT,
+    created_at      TIMESTAMP,
+    PRIMARY KEY (conversation_id, message_id)
+) WITH CLUSTERING ORDER BY (message_id DESC);
+```
+
+Partition key is `conversation_id` — all messages in a conversation live on the same partition. Clustering on `message_id` (TIMEUUID) gives us time-ordered messages.
+
+Query for last 100 messages:
+
+```sql
+SELECT * FROM messages
+WHERE conversation_id = ?
+LIMIT 100;
+```
+
+For pagination, use the last `message_id` as a cursor:
+
+```sql
+SELECT * FROM messages
+WHERE conversation_id = ?
+AND message_id < ? -- cursor
+LIMIT 100;
+```
+
+**Message ID generation:** Use Snowflake IDs or UUIDs with embedded timestamps. Avoid auto-increment — doesn't scale across distributed systems.
+
+## Group Chat: Fan-out
+
+For a 1:1 chat, deliver to 1 recipient. For a group with 500 members, deliver to 499. Two strategies:
+
+**Fan-out on write:** When a message is sent, immediately deliver to all group members' inboxes. Fast reads (each user reads from their inbox), expensive writes.
+
+**Fan-out on read:** Store one copy of the message, let each user's client query for new messages. Cheap writes, expensive reads.
+
+For medium groups (<= 500 members), fan-out on write is fine. For large groups (Telegram channels with millions), fan-out on read or a hybrid approach is necessary.
+
+```java
+void fanOutGroupMessage(Message msg, List<Long> memberIds) {
+    List<CompletableFuture<Void>> futures = memberIds.stream()
+        .map(memberId -> CompletableFuture.runAsync(() -> {
+            String serverId = connectionRegistry.getServerForUser(memberId);
+            if (serverId != null) {
+                // User is online — push via WS
+                internalMQ.publish(serverId, msg);
+            } else {
+                // User is offline — queue for push notification
+                pushQueue.enqueue(memberId, msg);
+            }
+        }))
+        .collect(Collectors.toList());
+
+    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+}
+```
+
+## Delivery Receipts
+
+Three states: **Sent** (stored in server), **Delivered** (reached recipient device), **Read** (user opened the conversation).
+
+Implementation:
+
+```
+Message stored → emit "sent" ACK to sender
+Message pushed to recipient WS → recipient sends "delivered" ACK → forward to sender
+User opens conversation → client sends "read" receipt → forward to sender
+```
+
+Store delivery state per message per recipient in Cassandra:
+
+```sql
+CREATE TABLE message_receipts (
+    message_id  UUID,
+    user_id     UUID,
+    status      TEXT,  -- 'delivered' | 'read'
+    updated_at  TIMESTAMP,
+    PRIMARY KEY (message_id, user_id)
+);
+```
+
+## Presence: Online/Offline Status
+
+Presence is deceptively hard at scale. Simple approach:
+
+1. When a user connects WebSocket, write `user:{id}:online = true` to Redis with TTL = 30s
+2. While connected, client sends a heartbeat every 15s; server refreshes the TTL
+3. When WebSocket disconnects, delete the key (or let TTL expire)
+4. To check if a user is online: `EXISTS user:{id}:online`
+
+For large groups, checking presence of all members on every message send is expensive. Instead:
+
+- Check presence only for small groups (< 100 members)
+- For large groups, assume offline and let push notifications deliver
+
+## Push Notifications for Offline Users
+
+When a user is offline (no active WebSocket), messages queue in a per-user inbox. When the device comes back online:
+
+1. Client reconnects WebSocket
+2. Sends `SYNC` message with last received message ID
+3. Server pushes all unread messages since that ID
+
+For immediate delivery to offline users, use platform push notifications (APNs for iOS, FCM for Android) via a notification service.
+
+## Media Messages
+
+Don't send media through the message queue — it's not designed for large payloads.
+
+Flow:
+
+1. Client uploads media directly to S3 (using a pre-signed URL from the server)
+2. Client sends a message containing the S3 URL
+3. Recipients download media from S3 CDN directly
+
+This keeps the chat servers stateless and the message payloads small.
+
+## Message Encryption: End-to-End
+
+WhatsApp uses the Signal protocol. At a high level:
+
+- Each user has a public/private key pair stored on their device
+- Messages are encrypted with the recipient's public key on the sender's device
+- The server never sees plaintext — only encrypted blobs
+- Key exchange happens via the server but the server cannot decrypt
+
+For a simpler implementation: TLS in transit + at-rest encryption of stored messages using the user's key.
+
+## Scaling Numbers
+
+| Component          | Sizing                                                            |
+| ------------------ | ----------------------------------------------------------------- |
+| WebSocket servers  | 50M connections / 50K per server = 1,000 servers                  |
+| Message throughput | 23K msg/s → Kafka easily handles 1M msg/s                         |
+| Storage            | 23K msg/s × 100 bytes avg × 86,400s × 365 days × 5 years ≈ 3.6 PB |
+| Redis (presence)   | 50M keys × ~100 bytes = ~5 GB — easily fits                       |
+
+## Key Takeaways
+
+- WebSockets for real-time bidirectional messaging; SSE or long polling as fallback
+- Connection registry (Redis) maps user_id to WebSocket server_id for routing
+- Cassandra for message storage — partition by conversation_id, cluster by time
+- Kafka as the async message bus between sender and fan-out/storage
+- Fan-out on write for small groups; on read for large channels
+- Delivery receipts require per-message-per-recipient state
+- Presence via Redis with TTL + heartbeat
+- Media uploads go directly to S3, not through chat servers

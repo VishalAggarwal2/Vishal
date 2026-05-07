@@ -2,7 +2,10 @@ import '@fontsource/mukta';
 import './tailwind.css';
 
 import Analytics from 'app/components/analytics/analytics';
+import ChatBot from 'app/components/chatbot/chatbot';
+import EasterEgg from 'app/components/easter-egg';
 import Footer from 'app/components/layouts/footer';
+import LoadingScreen from 'app/components/loading-screen';
 import Header from 'app/components/layouts/header';
 import LenisProvider from 'app/components/providers/LenisProvider';
 import ThemeProvider from 'app/components/providers/ThemeProvider';
@@ -44,6 +47,9 @@ export default function RootLayout({ children }: RootLayoutProps) {
           <Header />
           <LenisProvider>{children}</LenisProvider>
           <Footer />
+          <LoadingScreen />
+          <ChatBot />
+          <EasterEgg />
           {process.env.NODE_ENV === 'production' && <Analytics />}
         </ThemeProvider>
       </body>

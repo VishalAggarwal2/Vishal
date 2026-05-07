@@ -2,37 +2,38 @@ import path from 'path';
 import { Fragment, Suspense } from 'react';
 import { readMDXFile } from '../blog/utils';
 import { CustomMDX } from '../components/mdx';
-
+import Reveal from '../components/reveal';
+import TechConstellation from '../components/tech-stack/tech-constellation';
 import Occupation from './occupation';
 
-// Define the path to the content.mdx file
-const contentPath = path.join(process.cwd(), 'app', 'about', 'content.mdx');
-// Read the MDX file content
-const { content } = readMDXFile(contentPath);
+const introPath = path.join(process.cwd(), 'app', 'about', 'content-intro.mdx');
+const workPath = path.join(process.cwd(), 'app', 'about', 'content-work.mdx');
+const { content: introContent } = readMDXFile(introPath);
+const { content: workContent } = readMDXFile(workPath);
 
-// Metadata for the page
 export const metadata = {
   title: 'About',
   description: 'About Vishal Aggarwal - Backend & DevOps Engineer',
 };
 
-// Page component
 export default function Page() {
   return (
     <Fragment>
-      {/* Occupation Component */}
-      <Occupation />
+      <Reveal>
+        <Occupation />
+      </Reveal>
 
-      {/* Render the MDX content */}
-      <CustomMDX source={content} />
-      {/* Suspense for async components */}
-      <Suspense fallback={<div>Loading...</div>}>
-        {/* GitHub Contributions Component */}
-        {/* <GithubContributions /> */}
+      <Reveal delay={0.1}>
+        <CustomMDX source={introContent} />
+      </Reveal>
 
-        {/* Top Tracks Component */}
-        {/* <TopTracks /> */}
-      </Suspense>
+      <TechConstellation />
+
+      <Reveal>
+        <CustomMDX source={workContent} />
+      </Reveal>
+
+      <Suspense fallback={null} />
     </Fragment>
   );
 }
