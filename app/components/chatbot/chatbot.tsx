@@ -27,7 +27,7 @@ const FUN_QUESTIONS = [
 const ANSWERS: Record<string, { title: string; body: string }> = {
   about: {
     title: '👋 About Vishal',
-    body: 'Vishal Aggarwal is a Software Engineer & Product Manager based in India.\n\n• Currently at Increff (B2B retail SaaS)\n• Expert in Java, Go & distributed systems\n• Product thinker who bridges eng and business\n• Published technical writer — 10+ articles on Medium',
+    body: 'Vishal Aggarwal is a Software Engineer based in India.\n\n• Currently at Increff (B2B retail SaaS)\n• Expert in Java, Go & distributed systems\n• Loves building scalable backends and clean APIs\n• Published technical writer — 10+ articles on Medium',
   },
   experience: {
     title: '💼 Work Experience',
@@ -51,7 +51,7 @@ const ANSWERS: Record<string, { title: string; body: string }> = {
   },
   hiring: {
     title: '👔 Open to Roles?',
-    body: 'Yes! Actively looking for:\n\n• Backend / Full-Stack Engineering roles\n• Product Engineering (hybrid PM + SWE)\n• Open to India or remote opportunities\n• Graduating May 2026 (LNMIIT)\n\n📧 vishalaggar230@gmail.com',
+    body: 'Yes! Actively looking for:\n\n• Backend / Full-Stack Engineering roles\n• Distributed systems & infrastructure roles\n• Open to India or remote opportunities\n• Graduating May 2026 (LNMIIT)\n\n📧 vishalaggar230@gmail.com',
   },
   hobbies: {
     title: '🎮 Hobbies',

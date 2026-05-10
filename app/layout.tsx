@@ -18,7 +18,7 @@ export const metadata: Metadata = {
     default: 'Vishal Aggarwal',
   },
   description:
-    'Software Developer and Product Manager skilled in Java Spring Boot, MERN stack, microservices, CI/CD, Docker, product strategy, user research, and data-driven roadmapping.',
+    'Software Developer skilled in Java Spring Boot, MERN stack, microservices, CI/CD, Docker, distributed systems, and scalable backend engineering.',
   metadataBase: new URL('https://vishalaggarwal.dev'),
 };
 

@@ -46,22 +46,21 @@ export default function Intro() {
       <div className="mx-auto flex min-h-screen max-w-5xl flex-col items-center justify-center px-10 py-24 text-4xl font-semibold tracking-tight md:py-28 md:text-6xl lg:px-20 lg:py-3 lg:text-7xl">
         <div className="leading-[1.15]">
           <div className="introText" style={{ opacity: opacityForBlock(progress, 0) }}>
-            I build products and the systems that power them.
+            I build the systems that power great software.
           </div>
           <span
             className="introText inline-block after:content-['_']"
             style={{ opacity: opacityForBlock(progress, 1) }}
           >
-            I bridge the gap between user needs and technical execution — defining problems, shaping
-            roadmaps, and shipping products that drive real, measurable outcomes.
+            I design for scale first — clean APIs, resilient backends, and distributed systems that
+            hold up under real-world load and traffic.
           </span>
           <span
             className="introText inline-block"
             style={{ opacity: opacityForBlock(progress, 2) }}
           >
             I bring engineering depth in Java Spring Boot, React, Node.js, GraphQL, Docker, and
-            Jenkins CI/CD — and the same rigour to product thinking: user research, data-driven
-            decisions, and cross-functional alignment.
+            Jenkins CI/CD — writing code that ships fast and stays maintainable.
           </span>
         </div>
       </div>

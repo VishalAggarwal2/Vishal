@@ -7,6 +7,7 @@ import { components } from '../components/mdx';
 export interface BlogPost {
   metadata: Metadata;
   slug: string;
+  readingTime?: number;
 }
 
 export type Metadata = {
@@ -69,9 +70,11 @@ export function getBlogPosts(): BlogPost[] {
   const mdxFiles = getMDXFiles(dir);
 
   const posts = mdxFiles.map((file) => {
-    const { metadata } = readMDXFile(path.join(dir, file));
+    const { metadata, content } = readMDXFile(path.join(dir, file));
     const slug = path.basename(file, path.extname(file));
-    return { metadata, slug };
+    const wordCount = content.trim().split(/\s+/).length;
+    const readingTime = Math.max(1, Math.ceil(wordCount / 200));
+    return { metadata, slug, readingTime };
   });
 
   return posts
@@ -111,7 +114,10 @@ export async function getPostFromSlug(slug: string) {
     components: components,
   });
 
-  return { metadata: frontmatter, content };
+  const rawText = source.replace(/---[\s\S]*?---/, '').trim();
+  const readingTime = Math.max(1, Math.ceil(rawText.split(/\s+/).length / 200));
+
+  return { metadata: frontmatter, content, readingTime };
 }
 
 export function formatDate(date: string) {

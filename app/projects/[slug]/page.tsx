@@ -3,6 +3,8 @@ import { notFound } from 'next/navigation';
 import MainLayout from 'app/components/layouts/main-layout';
 import Reveal from 'app/components/reveal';
 import { projects } from 'app/projects/constants';
+import ImageLightbox from './image-lightbox';
+import IntervAIDetail from './interv-ai-detail';
 
 interface Props {
   params: Promise<{ slug: string }>;
@@ -19,7 +21,6 @@ export async function generateMetadata({ params }: Props) {
   return { title: project.title };
 }
 
-// Tag colour palette — cycles through a small set of soft hues
 const TAG_COLORS = [
   'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
   'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300',
@@ -37,32 +38,34 @@ export default async function ProjectDetailPage({ params }: Props) {
 
   if (!project) notFound();
 
+  if (project.slug === 'interv-ai') {
+    return (
+      <MainLayout>
+        <IntervAIDetail project={project} />
+      </MainLayout>
+    );
+  }
+
   return (
     <MainLayout>
-      {/* Back link */}
+      {/* Back */}
       <Reveal className="pt-6 pb-2">
         <Link
           href="/projects"
           className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
         >
-          <span aria-hidden>←</span>
-          <span>Back to Projects</span>
+          <span aria-hidden>←</span> Back to Projects
         </Link>
       </Reveal>
 
       {/* Hero */}
-      <Reveal delay={0.05} className="mt-6 mb-10 space-y-5">
-        {/* Role badge */}
-        <span className="inline-block rounded-full bg-gray-100 px-3 py-1 text-xs font-medium tracking-wide text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+      <Reveal delay={0.05} className="mt-8 mb-12 space-y-4">
+        <span className="inline-block rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold tracking-wide text-gray-600 dark:bg-gray-800 dark:text-gray-300">
           {project.role}
         </span>
-
-        {/* Title */}
-        <h1 className="text-3xl font-extrabold leading-tight tracking-tight text-gray-900 dark:text-gray-100 sm:text-4xl md:text-5xl">
+        <h1 className="text-4xl font-extrabold leading-tight tracking-tight text-gray-900 dark:text-gray-100 sm:text-5xl md:text-6xl">
           {project.title}
         </h1>
-
-        {/* Tech stack pills */}
         <div className="flex flex-wrap gap-2 pt-1">
           {project.techStack.map((tech, i) => (
             <span
@@ -75,39 +78,44 @@ export default async function ProjectDetailPage({ params }: Props) {
         </div>
       </Reveal>
 
-      {/* Divider */}
+      {/* Screenshot gallery with lightbox */}
+      {project.images && project.images.length > 0 && (
+        <Reveal delay={0.08} className="mb-14">
+          <ImageLightbox images={project.images} title={project.title} />
+        </Reveal>
+      )}
+
       <div className="border-t border-gray-200 dark:border-gray-700" />
 
       {/* About */}
-      <Reveal delay={0.1} className="mt-10 mb-10 max-w-3xl space-y-3">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-          About this project
-        </h2>
-        <p className="leading-8 text-gray-600 dark:text-gray-400">{project.description}</p>
+      <Reveal delay={0.1} className="mt-10 mb-12 max-w-3xl space-y-4">
+        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
+          About
+        </p>
+        <p className="text-lg leading-9 text-gray-600 dark:text-gray-400">{project.description}</p>
       </Reveal>
 
-      {/* What I built & learned */}
-      <Reveal delay={0.15} className="mb-12 max-w-3xl space-y-6">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-          What I built &amp; learned
-        </h2>
-        <ol className="space-y-6">
+      {/* What I built */}
+      <Reveal delay={0.15} className="mb-14 max-w-3xl space-y-8">
+        <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
+          What I Built
+        </p>
+        <ol className="space-y-10">
           {project.learnings.map((item, i) => (
-            <li key={i} className="flex gap-5">
-              {/* Large number */}
+            <li key={i} className="flex gap-6">
               <span
-                className="mt-0.5 shrink-0 text-4xl font-extrabold leading-none text-gray-100 dark:text-gray-800 select-none"
+                className="mt-0.5 shrink-0 select-none text-5xl font-extrabold leading-none tabular-nums text-gray-100 dark:text-gray-800"
                 aria-hidden
               >
                 {String(i + 1).padStart(2, '0')}
               </span>
-              <p className="leading-7 text-gray-600 dark:text-gray-400">{item}</p>
+              <p className="pt-2 leading-7 text-gray-600 dark:text-gray-400">{item}</p>
             </li>
           ))}
         </ol>
       </Reveal>
 
-      {/* CTA buttons */}
+      {/* CTA */}
       {(project.website || project.github) && (
         <Reveal
           delay={0.2}
@@ -118,10 +126,9 @@ export default async function ProjectDetailPage({ params }: Props) {
               href={project.website}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-5 py-3 text-sm font-medium text-white transition-opacity hover:opacity-80 dark:bg-gray-100 dark:text-gray-900"
+              className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-6 py-3 text-sm font-medium text-white transition-opacity hover:opacity-80 dark:bg-gray-100 dark:text-gray-900"
             >
-              Visit Website
-              <span aria-hidden>→</span>
+              Visit Website <span aria-hidden>→</span>
             </a>
           )}
           {project.github && (
@@ -129,10 +136,9 @@ export default async function ProjectDetailPage({ params }: Props) {
               href={project.github}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-5 py-3 text-sm font-medium text-gray-700 transition-colors hover:border-gray-500 hover:text-gray-900 dark:border-gray-600 dark:text-gray-300 dark:hover:border-gray-400 dark:hover:text-gray-100"
+              className="inline-flex items-center gap-2 rounded-xl border border-gray-300 px-6 py-3 text-sm font-medium text-gray-700 transition-colors hover:border-gray-500 hover:text-gray-900 dark:border-gray-600 dark:text-gray-300 dark:hover:border-gray-400 dark:hover:text-gray-100"
             >
-              View on GitHub
-              <span aria-hidden>→</span>
+              View on GitHub <span aria-hidden>→</span>
             </a>
           )}
         </Reveal>

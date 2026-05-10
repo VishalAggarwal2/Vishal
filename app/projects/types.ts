@@ -8,6 +8,7 @@ export interface Project {
   description: string; // full paragraph description
   techStack: string[]; // array of tech tags
   learnings: string[]; // what was learned/built
+  images?: string[]; // optional screenshot gallery (filenames in /static/images/project/)
   github?: string; // optional github URL
   website?: string; // optional website URL (different from url)
 }
