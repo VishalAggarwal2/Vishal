@@ -5,6 +5,7 @@ import Reveal from 'app/components/reveal';
 import { projects } from 'app/projects/constants';
 import ImageLightbox from './image-lightbox';
 import IntervAIDetail from './interv-ai-detail';
+import TaskFlowDetail from './taskflow-detail';
 
 interface Props {
   params: Promise<{ slug: string }>;
@@ -42,6 +43,14 @@ export default async function ProjectDetailPage({ params }: Props) {
     return (
       <MainLayout>
         <IntervAIDetail project={project} />
+      </MainLayout>
+    );
+  }
+
+  if (project.slug === 'taskflow') {
+    return (
+      <MainLayout>
+        <TaskFlowDetail project={project} />
       </MainLayout>
     );
   }

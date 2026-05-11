@@ -29,6 +29,7 @@ export default function Projects() {
             title={project.title}
             slug={project.slug}
             role={project.role}
+            techStack={project.techStack}
             setModal={setModal}
           />
         </motion.div>
