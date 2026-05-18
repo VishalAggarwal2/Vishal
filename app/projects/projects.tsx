@@ -26,6 +26,7 @@ export default function Projects() {
         >
           <ProjectItem
             index={index}
+            modalIndex={index}
             title={project.title}
             slug={project.slug}
             role={project.role}

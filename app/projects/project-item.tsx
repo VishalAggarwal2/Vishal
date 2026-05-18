@@ -3,6 +3,7 @@ import { ProjectModal } from './types';
 
 interface ProjectProps {
   index: number;
+  modalIndex: number;
   title: string;
   slug: string;
   role: string;
@@ -12,6 +13,7 @@ interface ProjectProps {
 
 export default function ProjectItem({
   index,
+  modalIndex,
   title,
   slug,
   role,
@@ -24,8 +26,8 @@ export default function ProjectItem({
   return (
     <Link
       href={`/projects/${slug}`}
-      onMouseEnter={() => setModal({ active: true, index })}
-      onMouseLeave={() => setModal({ active: false, index })}
+      onMouseEnter={() => setModal({ active: true, index: modalIndex })}
+      onMouseLeave={() => setModal({ active: false, index: modalIndex })}
       className="group flex w-full items-start gap-4 border-b border-gray-200 px-4 py-8 transition-colors hover:bg-gray-50/80 dark:border-gray-800 dark:hover:bg-gray-900/40 sm:gap-8 sm:px-10 sm:py-12"
     >
       <span className="mt-2 hidden shrink-0 select-none text-xs font-semibold tabular-nums text-gray-300 dark:text-gray-700 sm:mt-3.5 sm:block">

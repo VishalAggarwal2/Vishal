@@ -1,11 +1,14 @@
 'use client';
 
 import { motion } from 'framer-motion';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useContext, useEffect, useRef } from 'react';
 import { HiOutlineArrowNarrowDown } from 'react-icons/hi';
 import { ScrollContext } from '../providers/ScrollProvider';
 import { renderCanvas } from './renderCanvas';
+
+const HeroScene = dynamic(() => import('./hero-scene'), { ssr: false, loading: () => null });
 
 export default function Hero() {
   const ref = useRef<HTMLHeadingElement>(null);
@@ -66,6 +69,7 @@ export default function Hero() {
           </div>
         </div>
       </div>
+      <HeroScene />
       <canvas className="bg-skin-base pointer-events-none absolute inset-0" id="canvas"></canvas>
     </div>
   );

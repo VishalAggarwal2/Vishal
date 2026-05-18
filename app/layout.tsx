@@ -8,6 +8,7 @@ import Footer from 'app/components/layouts/footer';
 import LoadingScreen from 'app/components/loading-screen';
 import Header from 'app/components/layouts/header';
 import LenisProvider from 'app/components/providers/LenisProvider';
+import PageTransition from 'app/components/providers/PageTransition';
 import ThemeProvider from 'app/components/providers/ThemeProvider';
 import { Metadata } from 'next';
 import { ReactNode } from 'react';
@@ -45,7 +46,9 @@ export default function RootLayout({ children }: RootLayoutProps) {
           themes={['dark', 'light']}
         >
           <Header />
-          <LenisProvider>{children}</LenisProvider>
+          <LenisProvider>
+            <PageTransition>{children}</PageTransition>
+          </LenisProvider>
           <Footer />
           <LoadingScreen />
           <ChatBot />

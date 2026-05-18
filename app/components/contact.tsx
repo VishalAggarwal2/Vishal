@@ -1,8 +1,11 @@
 'use client';
 
 import { AnimatePresence, motion } from 'framer-motion';
+import dynamic from 'next/dynamic';
 import { useState } from 'react';
 import { IoCopyOutline, IoCheckmarkOutline } from 'react-icons/io5';
+
+const ContactOrb = dynamic(() => import('./contact-orb'), { ssr: false, loading: () => null });
 
 const EMAIL = 'vishalaggar230@gmail.com';
 
@@ -29,6 +32,7 @@ export default function Contact() {
 
   return (
     <section className="relative h-screen w-screen py-10 px-12 md:px-32 xl:px-36 dark:bg-black dark:text-white bg-white text-black">
+      <ContactOrb />
       <div className="flex flex-col justify-evenly h-5/6">
         <span className="text-3xl md:text-6xl xl:text-8xl">
           Let&apos;s make something <br /> great together

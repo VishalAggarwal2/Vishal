@@ -29,6 +29,24 @@ export const workTiles: WorkTile[] = [
   },
   {
     description: `I built`,
+    title: 'IntervAI – Mock Interviewer Platform',
+    image: {
+      src: '/static/images/project/Intervue.png',
+      width: 600,
+      height: 554,
+    },
+  },
+  {
+    description: `I built`,
+    title: 'VoiceAI – Sales Call Intelligence',
+    image: {
+      src: '/static/images/project/VoiceAi1.png',
+      width: 600,
+      height: 554,
+    },
+  },
+  {
+    description: `I built`,
     title: 'Phoenix Portal – LNMIIT',
     image: {
       src: '/static/images/project/Phoenix.png',
