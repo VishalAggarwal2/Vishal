@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { useState } from 'react';
 
-const CATEGORIES = ['Backend', 'Frontend', 'Database', 'DevOps', 'Infrastructure'] as const;
+const CATEGORIES = ['Backend', 'Frontend', 'Database', 'DevOps', 'Infrastructure', 'AI'] as const;
 type Category = (typeof CATEGORIES)[number];
 
 const CATEGORY_COLOR: Record<Category, string> = {
@@ -12,6 +12,7 @@ const CATEGORY_COLOR: Record<Category, string> = {
   Database: '#34d399',
   DevOps: '#fb923c',
   Infrastructure: '#60a5fa',
+  AI: '#f59e0b',
 };
 
 interface Tech {
@@ -47,6 +48,17 @@ const STACK: Tech[] = [
   { name: 'Kafka', category: 'Infrastructure', projects: ['Increff', 'Distributed Systems'] },
   { name: 'Prometheus', category: 'Infrastructure', projects: ['CI/CD Pipeline', 'Bajaj Finserv'] },
   { name: 'Grafana', category: 'Infrastructure', projects: ['CI/CD Pipeline'] },
+
+  { name: 'LLM', category: 'AI', projects: ['VoiceAI', 'AI Projects'] },
+  { name: 'RAG', category: 'AI', projects: ['VoiceAI'] },
+  { name: 'MCP', category: 'AI', projects: ['AI Tools', 'VoiceAI'] },
+  { name: 'Vector DB', category: 'AI', projects: ['VoiceAI'] },
+  { name: 'LangChain', category: 'AI', projects: ['VoiceAI', 'AI Projects'] },
+  { name: 'Embeddings', category: 'AI', projects: ['VoiceAI'] },
+  { name: 'Claude API', category: 'AI', projects: ['VoiceAI', 'AI Tools'] },
+  { name: 'Prompt Engineering', category: 'AI', projects: ['VoiceAI', 'AI Projects'] },
+  { name: 'AI Agents', category: 'AI', projects: ['AI Tools', 'VoiceAI'] },
+  { name: 'OpenAI API', category: 'AI', projects: ['AI Projects'] },
 ];
 
 function TechBadge({ tech, index }: { tech: Tech; index: number }) {
